@@ -1,0 +1,36 @@
+{% extends "templates/web.html" %}
+
+{% block head %}
+  {{ super() }}
+  <link rel="manifest" href="/assets/time_tracking_app/manifest.json">
+  <meta name="theme-color" content="#1f4f7b">
+{% endblock %}
+
+{% block title %}Stempeluhr{% endblock %}
+
+{% block page_content %}
+<div class="stempel-container" style="max-width: 480px; margin: 2rem auto; text-align: center;">
+    <h2>Stempeluhr</h2>
+
+    <div style="margin: 1.5rem 0;">
+        <select id="project-select" class="form-control" style="margin-bottom: 1rem;">
+            <option value="">– Projekt auswählen (optional) –</option>
+        </select>
+
+        <select id="activity-type-select" class="form-control">
+            <option value="">– Tätigkeit / Aktivität auswählen –</option>
+        </select>
+    </div>
+
+    <div style="display:flex; gap:1rem; justify-content:center; margin-bottom:1.5rem;">
+        <button id="btn-in" class="btn btn-primary btn-lg">Kommen</button>
+        <button id="btn-out" class="btn btn-danger btn-lg">Gehen</button>
+    </div>
+
+    <div id="stempel-status" style="margin-top:1rem; font-size:0.9rem; color:#666;">
+        Bereit.
+    </div>
+</div>
+
+<script src="/assets/time_tracking_app/js/time-tracking.js"></script>
+{% endblock %}
