@@ -2,6 +2,9 @@ import frappe
 from frappe.utils import now_datetime
 from time_tracking_app.api.timesheet import create_timesheet_from_checkins
 
+def format_number(value):
+    return frappe.format(value, {"fieldtype": "Float"})
+
 def _get_employee_for_user(user=None):
     user = user or frappe.session.user
     employee = frappe.db.get_value("Employee", {"user_id": user}, "name")
@@ -50,8 +53,8 @@ def punch_in(project=None, activity_type=None, note=None,
         "employee": employee,
         "time": now_datetime(),
         "log_type": "IN",
-        "latitude": latitude,
-        "longitude": longitude
+        "latitude": format_number(latitude),
+        "longitude": format_number(longitude)
     }).insert(ignore_permissions=True)
 
     punch = frappe.get_doc({
@@ -63,8 +66,8 @@ def punch_in(project=None, activity_type=None, note=None,
         "status": "Open",
         "note": note,
         # Koordinaten trotzdem speichern, falls vorhanden
-        "latitude_in": latitude,
-        "longitude_in": longitude,
+        "latitude_in": format_number(latitude),
+        "longitude_in": format_number(longitude),
         "accuracy_in": accuracy,
     }).insert(ignore_permissions=True)
 
@@ -94,14 +97,14 @@ def punch_out(latitude=None, longitude=None, accuracy=None):
         "employee": employee,
         "time": now_datetime(),
         "log_type": "OUT",
-        "latitude": latitude,
-        "longitude": longitude
+        "latitude": format_number(latitude),
+        "longitude": format_number(longitude)
     }).insert(ignore_permissions=True)
 
     punch.checkin_out = checkin_out.name
     punch.status = "Closed"
-    punch.latitude_out = latitude
-    punch.longitude_out = longitude
+    punch.latitude_out = format_number(latitude)
+    punch.longitude_out = format_number(longitude)
     punch.accuracy_out = accuracy
     punch.save(ignore_permissions=True)
 
