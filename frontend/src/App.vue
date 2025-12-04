@@ -167,11 +167,15 @@
         <span class="tt-tab-label">Urlaub</span>
       </button>
     </nav>
+
+    <!-- Install-Prompt -->
+    <InstallPrompt />
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from "vue";
+import InstallPrompt from "./components/InstallPrompt.vue"
 
 const status = ref("Bereit.");
 const loading = ref(false);
