@@ -10,10 +10,13 @@ def _get_employee_for_user(user=None):
     return employee
 
 def _geo_required() -> bool:
-    """Liest die Einstellung aus dem Single Doctype 'Time Tracking Settings'."""
+    # """Liest die Einstellung aus dem Single Doctype 'Time Tracking Settings'."""
+    """Liest die Einstellung aus dem Single Doctype 'HR Settings'."""
     try:
-        settings = frappe.get_single("Time Tracking Settings")
-        return bool(settings.require_geolocation)
+        # settings = frappe.get_single("Time Tracking Settings")
+        # return bool(settings.require_geolocation)
+        settings = frappe.get_single("HR Settings")
+        return bool(settings.allow_geolocation_tracking)
     except Exception:
         return True
 
@@ -47,6 +50,8 @@ def punch_in(project=None, activity_type=None, note=None,
         "employee": employee,
         "time": now_datetime(),
         "log_type": "IN",
+        "latitude": latitude,
+        "longitude": longitude
     }).insert(ignore_permissions=True)
 
     punch = frappe.get_doc({
@@ -89,6 +94,8 @@ def punch_out(latitude=None, longitude=None, accuracy=None):
         "employee": employee,
         "time": now_datetime(),
         "log_type": "OUT",
+        "latitude": latitude,
+        "longitude": longitude
     }).insert(ignore_permissions=True)
 
     punch.checkin_out = checkin_out.name
