@@ -46,4 +46,3 @@ onBeforeUnmount(() => {
     window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
 });
 </script>
-  
