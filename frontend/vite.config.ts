@@ -23,10 +23,11 @@ export default defineConfig({
     outDir: '../time_tracking_app/public/time_tracking_app',
     emptyOutDir: true,
     cssCodeSplit: false,
+    chunkSizeWarningLimit: 1024,
     rollupOptions: {
       output: {
         entryFileNames: `app.js`,
-        chunkFileNames: `app.js`,
+        chunkFileNames: `chunk-[name].js`,
         assetFileNames: (asset) => {
           if (asset.name && asset.name.endsWith('.css')) {
             return 'app.css';

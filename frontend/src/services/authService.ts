@@ -15,5 +15,5 @@ export async function logout() {
     }
 
     // Zur Login-Seite umleiten (ERPNext Standard)
-    window.location.href = '/login?redirect-to=/tracker';
+    window.location.href = '/login?redirect-to=/time-tracking';
 }

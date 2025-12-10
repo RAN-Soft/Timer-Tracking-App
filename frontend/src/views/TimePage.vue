@@ -444,3 +444,19 @@ async function syncNow() {
     refreshEntries();
 }
 </script>
+  
+<style scoped>
+.avatar-bubble {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 14px;
+    color: white;
+    user-select: none;
+}
+</style>
+  

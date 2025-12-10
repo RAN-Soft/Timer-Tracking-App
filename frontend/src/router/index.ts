@@ -1,4 +1,4 @@
-import { createRouter, createWebHashHistory } from '@ionic/vue-router';
+import { createRouter, createWebHistory } from '@ionic/vue-router';
 import type { RouteRecordRaw } from 'vue-router';
 
 import TabsPage from '@/views/TabsPage.vue';
@@ -33,8 +33,7 @@ const routes: Array<RouteRecordRaw> = [
 ];
 
 const router = createRouter({
-    // Hash-Routing: /tracker#/tabs/time
-    history: createWebHashHistory(),
+    history: createWebHistory('/time-tracking/'),
     routes,
 });
 
