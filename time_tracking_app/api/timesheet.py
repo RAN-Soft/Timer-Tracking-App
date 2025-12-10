@@ -1,33 +1,48 @@
 import frappe
+from frappe.utils import get_datetime
 
-def create_timesheet_from_checkins(punch):
-    # punch = Project Punch Doctype   (aus deiner App)
-    checkin_in_time = frappe.db.get_value("Employee Checkin", punch.checkin_in, "time")
-    checkin_out_time = frappe.db.get_value("Employee Checkin", punch.checkin_out, "time")
+@frappe.whitelist()
+def create_timesheet_for_punch(
+    employee: str,
+    project: str,
+    activity_type: str,
+    from_time: str,
+    to_time: str,
+    note: str | None = None,
+):
+    # ISO-Strings aus dem Frontend in Python datetime parsen
+    from_dt = get_datetime(from_time)
+    to_dt = get_datetime(to_time)
 
-    if not checkin_in_time or not checkin_out_time:
-        frappe.throw("Checkin-Zeiten unvollständig.")
-        
-    duration_hours = (checkin_out_time - checkin_in_time).total_seconds() / 3600.0
-    activity_type = punch.activity_type or "Arbeit"
+    # WICHTIG: Zeitzone entfernen, damit MySQL ein "normales" DATETIME bekommt
+    if getattr(from_dt, "tzinfo", None) is not None:
+        from_dt = from_dt.replace(tzinfo=None)
+
+    if getattr(to_dt, "tzinfo", None) is not None:
+        to_dt = to_dt.replace(tzinfo=None)
+
+    if not from_dt or not to_dt:
+        frappe.throw("From Time and To Time are required")
+
+    duration_hours = (to_dt - from_dt).total_seconds() / 3600.0
 
     ts = frappe.get_doc({
         "doctype": "Timesheet",
-        "employee": punch.employee,
+        "employee": employee,
         "time_logs": [{
-            "from_time": checkin_in_time,
-            "to_time": checkin_out_time,
+            "from_time": from_dt,
+            "to_time": to_dt,
             "hours": duration_hours,
-            "project": punch.project,
+            "project": project,
             "activity_type": activity_type,
-            "description": punch.note,
-        }]
+            "description": note or "",
+        }],
     })
+
     ts.insert(ignore_permissions=True)
     ts.submit()
 
-    # Status aktualisieren
-    punch.status = "SyncedToTimesheet"
-    punch.db_update()
-
-    return ts.name
+    return {
+        "name": ts.name,
+        "hours": duration_hours,
+    }

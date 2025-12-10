@@ -1,0 +1,41 @@
+import { createRouter, createWebHashHistory } from '@ionic/vue-router';
+import type { RouteRecordRaw } from 'vue-router';
+
+import TabsPage from '@/views/TabsPage.vue';
+
+const routes: Array<RouteRecordRaw> = [
+    {
+        path: '/',
+        redirect: '/tabs/time',
+    },
+    {
+        path: '/tabs/',
+        component: TabsPage,
+        children: [
+            {
+                path: '',
+                redirect: '/tabs/time',
+            },
+            {
+                path: 'time',
+                component: () => import('@/views/TimePage.vue'),
+            },
+            {
+                path: 'leave',
+                component: () => import('@/views/LeavePage.vue'),
+            },
+        ],
+    },
+    {
+        path: '/:pathMatch(.*)*',
+        redirect: '/tabs/time',
+    },
+];
+
+const router = createRouter({
+    // Hash-Routing: /tracker#/tabs/time
+    history: createWebHashHistory(),
+    routes,
+});
+
+export default router;

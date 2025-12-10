@@ -1,0 +1,31 @@
+:root {
+    /* Primary Ionic-Farbe */
+    --ion-color-primary: #3880ff;
+    --ion-color-primary-rgb: 56, 128, 255;
+    --ion-color-primary-contrast: #ffffff;
+    --ion-color-primary-contrast-rgb: 255, 255, 255;
+    --ion-color-primary-shade: #3171e0;
+    --ion-color-primary-tint: #4c8dff;
+
+    /* Sekundärfarben */
+    --ion-color-secondary: #3dc2ff;
+    --ion-color-tertiary: #5260ff;
+    --ion-color-success: #2dd36f;
+    --ion-color-warning: #ffc409;
+    --ion-color-danger: #eb445a;
+    --ion-color-medium: #92949c;
+    --ion-color-light: #f4f5f8;
+}
+
+.avatar-bubble {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 14px;
+    color: white;
+    user-select: none;
+}
