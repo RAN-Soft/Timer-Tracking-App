@@ -298,7 +298,7 @@ export async function createTimesheetForPunch(
     payload: TimesheetFromPunchPayload,
 ): Promise<TimesheetFromPunchResponse> {
     console.log('createTimesheetForPunch payload', payload);
-    const res = await fetch('/api/method/tta.api.timesheet.create_timesheet_for_punch', {
+    const res = await fetch('/api/method/time_tracking_app.api.timesheet.create_timesheet_for_punch', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
