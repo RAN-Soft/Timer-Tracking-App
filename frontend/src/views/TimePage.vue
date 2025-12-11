@@ -189,9 +189,19 @@ import {
     type Activity,
 } from '@/services/offlineStore';
 import { syncAll, syncMasterData } from '@/services/syncService';
-import { fetchHRSettings } from '@/services/frappeApi';
+import {
+    fetchHRSettings,
+    createEmployeeCheckin,
+    createTimesheetForPunch,
+    getCurrentEmployeeName,
+    type EmployeeCheckinPayload,
+    type TimesheetFromPunchPayload,
+} from '@/services/frappeApi';
 import { useUserAvatar } from '@/services/userAvatar';
 import { logOutOutline } from 'ionicons/icons';
+
+// Mitarbeiter
+const currentEmployee = ref<string | null>(null);
 
 // Stammdaten
 const projects = ref<Project[]>(getProjects());
@@ -302,6 +312,12 @@ onMounted(async () => {
     await loadUserInitials();
 
     try {
+        currentEmployee.value = await getCurrentEmployeeName();
+    } catch (e) {
+        console.warn('Konnte Employee nicht laden', e);
+    }
+
+    try {
         const settings = await fetchHRSettings();
         if (settings) {
             const allowGeo =
@@ -397,9 +413,101 @@ function doPunch(coords?: { lat: number; lng: number }) {
 }
 
 // Button-Klick „Start / Stopp“
-function onPunchClick() {
+async function onPunchClick() {
     if (!selectedProject.value || !selectedActivity.value) return;
 
+    const isStart = !activeEntry.value; // kein offener Eintrag → Start
+    const nowIso = new Date().toISOString();
+
+    const ensureEmployee = async () => {
+        if (!currentEmployee.value) {
+            currentEmployee.value = await getCurrentEmployeeName();
+        }
+        return currentEmployee.value;
+    };
+
+    const doOnlineStart = async (coords?: { lat: number; lng: number }) => {
+        // lokal speichern (Offline-Fall)
+        addPunch(selectedProject.value!, selectedActivity.value!, coords);
+        refreshEntries();
+
+        if (!navigator.onLine) {
+            // Offline → nur lokal, Sync macht später Employee Checkin/Timesheet
+            return;
+        }
+
+        try {
+            const employee = await ensureEmployee();
+            if (!employee) return;
+
+            const payload: EmployeeCheckinPayload = {
+                employee,
+                time: nowIso,
+                log_type: 'IN',
+                latitude: coords?.lat,
+                longitude: coords?.lng,
+            };
+
+            await createEmployeeCheckin(payload);
+            // Keine Timesheet-Erstellung hier, erst beim Stop
+        } catch (e) {
+            console.error('Direkter Check-In fehlgeschlagen', e);
+            showToast('Check-In gespeichert, aber konnte nicht direkt übertragen werden.');
+        }
+    };
+
+    const doOnlineStop = async (coords?: { lat: number; lng: number }) => {
+        const openEntry = activeEntry.value;
+        if (!openEntry) return;
+
+        // lokalen Stop setzen
+        addPunch(selectedProject.value!, selectedActivity.value!, coords);
+        refreshEntries();
+
+        if (!navigator.onLine) {
+            // Offline → Sync erledigt später OUT + Timesheet
+            return;
+        }
+
+        try {
+            const employee = await ensureEmployee();
+            if (!employee) return;
+
+            // OUT-Checkin
+            const outPayload: EmployeeCheckinPayload = {
+                employee,
+                time: nowIso,
+                log_type: 'OUT',
+                latitude: coords?.lat,
+                longitude: coords?.lng,
+            };
+            await createEmployeeCheckin(outPayload);
+
+            // Timesheet
+            const tsPayload: TimesheetFromPunchPayload = {
+                employee,
+                project: openEntry.projectId,
+                activity_type: openEntry.activityId,
+                from_time: openEntry.start,
+                to_time: nowIso,
+                note: '',
+            };
+            await createTimesheetForPunch(tsPayload);
+        } catch (e) {
+            console.error('Direkter Check-Out/Timesheet fehlgeschlagen', e);
+            showToast('Stopp gespeichert, aber konnte nicht direkt übertragen werden.');
+        }
+    };
+
+    const handlePunchWithCoords = async (coords?: { lat: number; lng: number }) => {
+        if (isStart) {
+            await doOnlineStart(coords);
+        } else {
+            await doOnlineStop(coords);
+        }
+    };
+
+    // Geo-Handling wie bisher
     if (geoRequired.value) {
         if (!('geolocation' in navigator)) {
             showToast('Ohne GPS ist Stempeln nicht möglich.');
@@ -408,10 +516,10 @@ function onPunchClick() {
 
         waitingForLocation.value = true;
         navigator.geolocation.getCurrentPosition(
-            (pos) => {
+            async (pos) => {
                 waitingForLocation.value = false;
                 const { latitude, longitude } = pos.coords;
-                doPunch({ lat: latitude, lng: longitude });
+                await handlePunchWithCoords({ lat: latitude, lng: longitude });
             },
             (err) => {
                 waitingForLocation.value = false;
@@ -427,9 +535,10 @@ function onPunchClick() {
             },
         );
     } else {
-        doPunch();
+        await handlePunchWithCoords();
     }
 }
+
 
 // Sync-Button
 async function syncNow() {

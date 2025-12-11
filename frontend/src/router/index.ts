@@ -24,6 +24,10 @@ const routes: Array<RouteRecordRaw> = [
                 path: 'leave',
                 component: () => import('@/views/LeavePage.vue'),
             },
+            {
+                path: 'attendance',
+                component: () => import('@/views/AttendancePage.vue'),
+            },
         ],
     },
     {

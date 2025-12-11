@@ -384,3 +384,56 @@ export async function createLeaveRequest(doc: FrappeLeaveRequestPayload) {
         return undefined;
     }
 }
+
+// -----------------------------------------------------
+// Attendance
+// -----------------------------------------------------
+
+export interface EmployeeApi {
+    name: string;
+    first_name?: string;
+    last_name?: string;
+    employee_name?: string;
+}
+
+export interface EmployeeCheckinApi {
+    name: string;
+    employee: string;
+    time: string;
+    log_type: 'IN' | 'OUT';
+}
+
+export async function fetchEmployees(): Promise<EmployeeApi[]> {
+    const fields = encodeURIComponent(
+        JSON.stringify(['name', 'first_name', 'last_name', 'employee_name']),
+    );
+
+    const path = `/api/resource/Employee?fields=${fields}&limit_page_length=1000`;
+
+    return frappeRequest<EmployeeApi[]>('GET', path);
+}
+
+export async function fetchTodayCheckins(): Promise<EmployeeCheckinApi[]> {
+    const today = new Date();
+
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+
+    const start = `${yyyy}-${mm}-${dd} 00:00:00`;
+    const end = `${yyyy}-${mm}-${dd} 23:59:59`;
+
+    const fields = encodeURIComponent(
+        JSON.stringify(['name', 'employee', 'time', 'log_type']),
+    );
+    const filters = encodeURIComponent(
+        JSON.stringify([
+            ['time', '>=', start],
+            ['time', '<=', end],
+        ]),
+    );
+
+    const path = `/api/resource/Employee%20Checkin?fields=${fields}&filters=${filters}&limit_page_length=1000`;
+
+    return frappeRequest<EmployeeCheckinApi[]>('GET', path);
+}
