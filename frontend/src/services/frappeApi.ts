@@ -13,6 +13,16 @@ async function frappeRequest<T>(
     path: string,
     body?: unknown,
 ): Promise<T> {
+    const csrf = getCsrfToken();
+
+    const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+    };
+
+    if (csrf) {
+        headers['X-Frappe-CSRF-Token'] = csrf;
+    }
+
     const res = await fetch(path, {
         method,
         headers: {
@@ -22,14 +32,46 @@ async function frappeRequest<T>(
         body: body ? JSON.stringify(body) : undefined,
     });
 
+    const text = await res.text();
+
     if (!res.ok) {
-        const text = await res.text();
         console.error('frappeRequest error', method, path, res.status, text);
-        throw new Error(`Frappe request failed: ${res.status}`);
+
+        // Error-Objekt mit extra Infos
+        const error = new Error(`Frappe request failed: ${res.status}`);
+        (error as any).status = res.status;
+        (error as any).responseText = text;
+        throw error;
     }
 
-    const json = (await res.json()) as FrappeResponse<T>;
-    return json.data;
+    try {
+        const json = JSON.parse(text) as FrappeResponse<T>;
+        return json.data;
+    } catch {
+        return text as unknown as T;
+    }
+}
+
+// -----------------------------------------------------
+// CSRF
+// -----------------------------------------------------
+function getCookie(name: string): string | null {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) {
+        return parts.pop()!.split(';').shift() || null;
+    }
+    return null;
+}
+
+function getCsrfToken(): string | null {
+    const w = window as any;
+    return (
+        w.csrf_token ||
+        (w.frappe && w.frappe.csrf_token) ||
+        getCookie('csrf_token') ||
+        null
+    );
 }
 
 // -----------------------------------------------------
@@ -289,56 +331,56 @@ export interface FrappeLeaveRequestPayload {
 const LEAVE_APPLICATION_DTYPE = 'Leave Application';
 
 export async function createLeaveRequest(doc: FrappeLeaveRequestPayload) {
-  console.log('createLeaveRequest payload', doc);
+    console.log('createLeaveRequest payload', doc);
 
-  const res = await fetch(`/api/resource/${encodeURIComponent(LEAVE_APPLICATION_DTYPE)}`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...doc, doctype: LEAVE_APPLICATION_DTYPE }),
-  });
+    const res = await fetch(`/api/resource/${encodeURIComponent(LEAVE_APPLICATION_DTYPE)}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...doc, doctype: LEAVE_APPLICATION_DTYPE }),
+    });
 
-  const text = await res.text();
+    const text = await res.text();
 
-  if (!res.ok) {
-    console.error('createLeaveRequest error', res.status, text);
+    if (!res.ok) {
+        console.error('createLeaveRequest error', res.status, text);
 
-    let msg = 'Fehler beim Erstellen des Urlaubsantrags';
+        let msg = 'Fehler beim Erstellen des Urlaubsantrags';
 
-    try {
-      const json = JSON.parse(text);
-
-      // Frappe / HRMS packt oft "exception" oder "_server_messages"
-      if (typeof json.exception === 'string' && json.exception) {
-        msg = json.exception;
-      } else if (json._server_messages) {
         try {
-          // _server_messages ist oft ein JSON-Array als String
-          const serverMessages = JSON.parse(json._server_messages);
-          if (Array.isArray(serverMessages) && serverMessages.length > 0) {
-            msg = serverMessages.join('\n');
-          }
+            const json = JSON.parse(text);
+
+            // Frappe / HRMS packt oft "exception" oder "_server_messages"
+            if (typeof json.exception === 'string' && json.exception) {
+                msg = json.exception;
+            } else if (json._server_messages) {
+                try {
+                    // _server_messages ist oft ein JSON-Array als String
+                    const serverMessages = JSON.parse(json._server_messages);
+                    if (Array.isArray(serverMessages) && serverMessages.length > 0) {
+                        msg = serverMessages.join('\n');
+                    }
+                } catch {
+                    // ignorieren, fallback bleibt msg
+                }
+            } else if (typeof json.message === 'string' && json.message) {
+                msg = json.message;
+            }
         } catch {
-          // ignorieren, fallback bleibt msg
+            // text war kein JSON, dann nehmen wir den HTTP-Status + Text
+            if (text) {
+                msg = text;
+            }
         }
-      } else if (typeof json.message === 'string' && json.message) {
-        msg = json.message;
-      }
-    } catch {
-      // text war kein JSON, dann nehmen wir den HTTP-Status + Text
-      if (text) {
-        msg = text;
-      }
+
+        throw new Error(msg);
     }
 
-    throw new Error(msg);
-  }
-
-  // Erfolgsfall → versuchen JSON wieder zu parsen
-  try {
-    const json = JSON.parse(text);
-    return (json as any).data;
-  } catch {
-    return undefined;
-  }
+    // Erfolgsfall → versuchen JSON wieder zu parsen
+    try {
+        const json = JSON.parse(text);
+        return (json as any).data;
+    } catch {
+        return undefined;
+    }
 }

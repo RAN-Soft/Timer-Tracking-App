@@ -100,12 +100,6 @@
                             </ion-select>
                         </ion-item>
 
-                        <ion-item lines="none" v-if="geoRequired">
-                            <ion-label color="medium">
-                                GPS ist für das Stempeln erforderlich (Geo-Tracking in HRMS aktiv).
-                            </ion-label>
-                        </ion-item>
-
                         <ion-button expand="block" class="ion-margin-top" :disabled="!selectedProject ||
                             !selectedActivity ||
                             waitingForLocation ||
