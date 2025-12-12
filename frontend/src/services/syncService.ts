@@ -1,19 +1,19 @@
 import {
-    getPendingTimeEntries,
-    getPendingLeaveRequests,
-    markTimeEntrySynced,
-    markLeaveRequestSynced,
-    saveProjects,
-    saveActivities,
-    saveLeaveTypes,
+    getTimeEntries,
     removeTimeEntry,
+    markCheckinSynced,
+    markCheckoutSynced,
+    markTimesheetSynced,
+    markEntryFailed,
+    markEntrySynced,
+    getLeaveRequests,
     removeLeaveRequest,
-    type TimeEntry,
-    type LeaveRequest,
-    type Project,
-    type Activity,
-    type LeaveType,
-} from './offlineStore';
+    markLeaveRequestFailed,
+    markLeaveRequestSynced,
+    setProjects,
+    setActivities,
+    setLeaveTypes,
+} from '@/services/offlineStore';
 
 import {
     fetchProjects,
@@ -26,180 +26,139 @@ import {
     type EmployeeCheckinPayload,
     type TimesheetFromPunchPayload,
     type FrappeLeaveRequestPayload,
-    type ProjectApi,
-    type ActivityApi,
-    type LeaveTypeApi,
-} from './frappeApi';
+} from '@/services/frappeApi';
 
-let isSyncRunning = false;
+let syncing = false;
 
-// ---------------------------
-// Masterdaten
-// ---------------------------
+function emitSyncUpdated() {
+    window.dispatchEvent(new CustomEvent('tta-sync-updated'));
+}
 
 export async function syncMasterData() {
-    try {
-        const projectApiList: ProjectApi[] = await fetchProjects();
-        console.log('syncMasterData: raw projects', projectApiList);
+    if (!navigator.onLine) return;
 
-        const safeProjects: Project[] = (projectApiList || [])
-            .filter(p => p && typeof p.name === 'string')
-            .map(p => ({
-                id: p.name,
-                name: p.project_name || p.name,
-                number: p.name,
-            }));
+    const [projects, activities, leaveTypes] = await Promise.all([
+        fetchProjects(),
+        fetchActivities(),
+        fetchLeaveTypes(),
+    ]);
 
-        saveProjects(safeProjects);
+    setProjects(projects);
+    setActivities(activities);
+    setLeaveTypes(leaveTypes);
 
-        const activityApiList: ActivityApi[] = await fetchActivities();
-        console.log('syncMasterData: raw activities', activityApiList);
-
-        const safeActivities: Activity[] = (activityApiList || [])
-            .filter(a => a && typeof a.name === 'string')
-            .map(a => ({
-                id: a.name,
-                name: a.name,
-            }));
-
-        saveActivities(safeActivities);
-
-        const leaveTypeApiList: LeaveTypeApi[] = await fetchLeaveTypes();
-        console.log('syncMasterData: raw leave types', leaveTypeApiList);
-
-        const safeLeaveTypes: LeaveType[] = (leaveTypeApiList || [])
-            .filter(lt => lt && typeof lt.name === 'string')
-            .map(lt => ({
-                id: lt.name,
-                name: lt.name,
-            }));
-
-        saveLeaveTypes(safeLeaveTypes);
-
-        window.dispatchEvent(new CustomEvent('tta-sync-updated'));
-    } catch (e) {
-        console.error('Master data sync error', e);
-    }
+    emitSyncUpdated();
 }
 
-// ---------------------------
-// Haupt-Sync
-// ---------------------------
+export async function syncTimeEntries() {
+    if (!navigator.onLine) return;
 
-export async function syncAll() {
-    if (isSyncRunning) {
-        console.log('Sync already running, skipping');
-        return;
-    }
-    if (!navigator.onLine) {
-        console.log('Offline, skipping sync');
-        return;
-    }
+    const employee = await getCurrentEmployeeName();
+    const entries = getTimeEntries();
 
-    isSyncRunning = true;
-    console.log('=== Sync started ===');
-    try {
-        await syncMasterData();
-
-        const employee = await getCurrentEmployeeName();
-        console.log('Sync employee:', employee);
-
-        await syncTimeEntries(employee);
-        await syncLeaveRequests(employee);
-
-        window.dispatchEvent(new CustomEvent('tta-sync-updated'));
-        console.log('=== Sync finished ===');
-    } catch (error) {
-        console.error('Sync failed:', error);
-    } finally {
-        isSyncRunning = false;
-    }
-}
-
-// ---------------------------
-// TimeEntries -> Checkins + Timesheet
-// ---------------------------
-
-async function syncTimeEntries(employee: string) {
-    const pending: TimeEntry[] = getPendingTimeEntries();
-    console.log('Pending time entries:', pending);
-
-    if (!pending.length) return;
-
-    for (const entry of pending) {
-        if (!entry.end) {
-            console.log('Skipping open entry (no end time)', entry);
-            continue;
-        }
-
+    for (const entry of entries) {
         try {
-            console.log('Syncing time entry', entry);
+            // IN nur senden wenn noch nicht gesendet
+            if (!entry.checkinSynced) {
+                const inPayload: EmployeeCheckinPayload = {
+                    employee,
+                    time: entry.start,
+                    log_type: 'IN',
+                    latitude: entry.latitudeIn,
+                    longitude: entry.longitudeIn,
+                };
+                await createEmployeeCheckin(inPayload);
+                markCheckinSynced(entry.id);
+            }
 
-            const checkinIn: EmployeeCheckinPayload = {
-                employee,
-                time: entry.start,
-                log_type: 'IN',
-                latitude: entry.checkinLat,
-                longitude: entry.checkinLng,
-            };
-            await createEmployeeCheckin(checkinIn);
+            // OUT nur wenn entry.end vorhanden und noch nicht gesendet
+            if (entry.end && !entry.checkoutSynced) {
+                const outPayload: EmployeeCheckinPayload = {
+                    employee,
+                    time: entry.end,
+                    log_type: 'OUT',
+                    latitude: entry.latitudeOut,
+                    longitude: entry.longitudeOut,
+                };
+                await createEmployeeCheckin(outPayload);
+                markCheckoutSynced(entry.id);
+            }
 
-            const checkinOut: EmployeeCheckinPayload = {
-                employee,
-                time: entry.end,
-                log_type: 'OUT',
-                latitude: entry.checkoutLat,
-                longitude: entry.checkoutLng,
-            };
-            await createEmployeeCheckin(checkinOut);
+            // Timesheet nur wenn Ende vorhanden und noch nicht erstellt
+            if (entry.end && !entry.timesheetSynced) {
+                const tsPayload: TimesheetFromPunchPayload = {
+                    employee,
+                    project: entry.projectId,
+                    activity_type: entry.activityId,
+                    from_time: entry.start,
+                    to_time: entry.end,
+                    note: '',
+                };
+                await createTimesheetForPunch(tsPayload);
+                markTimesheetSynced(entry.id);
+            }
 
-            const tsPayload: TimesheetFromPunchPayload = {
-                employee,
-                project: entry.projectId,
-                activity_type: entry.activityId,
-                from_time: entry.start,
-                to_time: entry.end,
-                note: '',
-            };
-            await createTimesheetForPunch(tsPayload);
+            // Wenn alles erledigt → optional löschen
+            if (entry.checkinSynced && (entry.end ? entry.checkoutSynced && entry.timesheetSynced : true)) {
+                // wenn entry noch offen (kein end), nicht löschen
+                if (entry.end) {
+                    markEntrySynced(entry.id);
+                    removeTimeEntry(entry.id);
+                }
+            }
 
-            markTimeEntrySynced(entry.id);
-            console.log('Time entry synced:', entry.id);
-        } catch (error) {
-            console.error('Failed to sync time entry, deleting local entry', entry.id, error);
-            // ❗ Wenn Sync fehlschlägt (z.B. Validierungsfehler), Eintrag lokal löschen
-            removeTimeEntry(entry.id);
+        } catch (e: any) {
+            console.error('Failed to sync time entry', entry.id, e);
+            // Bei Fehler NICHT löschen – nur markieren.
+            // Wenn niemals syncbar sind.
+            markEntryFailed(entry.id);
         }
     }
+
+    emitSyncUpdated();
 }
 
-// ---------------------------
-// Leave Requests
-// ---------------------------
+export async function syncLeaveRequests() {
+    if (!navigator.onLine) return;
 
-async function syncLeaveRequests(employee: string) {
-    const pending: LeaveRequest[] = getPendingLeaveRequests();
-    console.log('Pending leave requests:', pending);
+    const employee = await getCurrentEmployeeName();
+    const reqs = getLeaveRequests();
 
-    if (!pending.length) return;
-
-    for (const lr of pending) {
+    for (const r of reqs) {
         try {
             const payload: FrappeLeaveRequestPayload = {
                 employee,
-                from_date: lr.from.slice(0, 10),
-                to_date: lr.to.slice(0, 10),
-                leave_type: lr.type,
-                reason: lr.reason,
+                from_date: r.from.slice(0, 10),
+                to_date: r.to.slice(0, 10),
+                leave_type: r.leaveType,
+                reason: r.reason || undefined,
             };
 
             await createLeaveRequest(payload);
-            markLeaveRequestSynced(lr.id);
-            console.log('Leave request synced:', lr.id);
-        } catch (error) {
-            console.error('Failed to sync leave request, deleting local entry', lr.id, error);
-            // Bei Sync-Fehler LeaveRequest lokal löschen
-            removeLeaveRequest(lr.id);
+
+            markLeaveRequestSynced(r.id);
+            removeLeaveRequest(r.id);
+        } catch (e: any) {
+            console.error('Failed to sync leave request, deleting local entry', r.id, e);
+            markLeaveRequestFailed(r.id);
+            removeLeaveRequest(r.id);
+            window.dispatchEvent(new CustomEvent('tta-toast', { detail: { message: e?.message || 'Urlaubsantrag konnte nicht synchronisiert werden.' } }));
         }
+    }
+
+    emitSyncUpdated();
+}
+
+export async function syncAll() {
+    if (syncing) return;
+    if (!navigator.onLine) return;
+
+    syncing = true;
+    try {
+        await syncMasterData();
+        await syncTimeEntries();
+        await syncLeaveRequests();
+    } finally {
+        syncing = false;
     }
 }

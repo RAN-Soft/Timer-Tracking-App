@@ -1,12 +1,9 @@
-// src/services/offlineStore.ts
-import { v4 as uuidv4 } from 'uuid';
-
-export type SyncStatus = 'pending' | 'synced';
+export type SyncStatus = 'LOCAL' | 'SYNCED' | 'FAILED';
 
 export interface Project {
     id: string;
     name: string;
-    number?: string | null;
+    number?: string;
 }
 
 export interface Activity {
@@ -25,206 +22,288 @@ export interface TimeEntry {
     activityId: string;
     start: string; // ISO
     end?: string;  // ISO
+    latitudeIn?: number;
+    longitudeIn?: number;
+    latitudeOut?: number;
+    longitudeOut?: number;
+    checkinSynced: boolean;
+    checkoutSynced: boolean;
+    timesheetSynced: boolean;
     syncStatus: SyncStatus;
-    checkinLat?: number;
-    checkinLng?: number;
-    checkoutLat?: number;
-    checkoutLng?: number;
 }
 
-export interface LeaveRequest {
+export interface LeaveRequestLocal {
     id: string;
-    from: string;  // ISO
-    to: string;    // ISO
-    type: string;
-    reason: string;
+    from: string; // ISO
+    to: string;   // ISO
+    leaveType: string;
+    reason?: string;
     syncStatus: SyncStatus;
 }
 
-const KEYS = {
-    timeEntries: 'time_tracking_time_entries',
-    leaveRequests: 'time_tracking_leave_requests',
-    projects: 'time_tracking_projects',
-    activities: 'time_tracking_activities',
-    leaveTypes: 'time_tracking_leave_types',
-};
+interface StoreShape {
+    projects: Project[];
+    activities: Activity[];
+    leaveTypes: LeaveType[];
+    timeEntries: TimeEntry[];
+    leaveRequests: LeaveRequestLocal[];
+}
 
-function load<T>(key: string): T[] {
+const STORAGE_KEY = 'tta_offline_store_v1';
+
+function uuid(): string {
+    // simple uuid v4-ish
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        // eslint-disable-next-line no-mixed-operators
+        const v = c === 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+    });
+}
+
+function load(): StoreShape {
     try {
-        const raw = localStorage.getItem(key);
-        if (!raw) return [];
-        return JSON.parse(raw) as T[];
-    } catch (e) {
-        console.error(`Failed to load from localStorage[${key}]`, e);
-        return [];
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return emptyStore();
+        const parsed = JSON.parse(raw) as StoreShape;
+
+        return {
+            projects: parsed.projects || [],
+            activities: parsed.activities || [],
+            leaveTypes: parsed.leaveTypes || [],
+            timeEntries: parsed.timeEntries || [],
+            leaveRequests: parsed.leaveRequests || [],
+        };
+    } catch {
+        return emptyStore();
     }
 }
 
-function save<T>(key: string, data: T[]) {
-    try {
-        localStorage.setItem(key, JSON.stringify(data));
-    } catch (e) {
-        console.error(`Failed to save to localStorage[${key}]`, e);
-    }
+function save(store: StoreShape) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
 }
 
-// ---------------------------
-// Time Entries
-// ---------------------------
+function emptyStore(): StoreShape {
+    return {
+        projects: [],
+        activities: [],
+        leaveTypes: [],
+        timeEntries: [],
+        leaveRequests: [],
+    };
+}
+
+function getStore(): StoreShape {
+    return load();
+}
+
+// ----------------------
+// Master data
+// ----------------------
+
+export function setProjects(items: Project[]) {
+    const s = getStore();
+    s.projects = items;
+    save(s);
+}
+
+export function setActivities(items: Activity[]) {
+    const s = getStore();
+    s.activities = items;
+    save(s);
+}
+
+export function setLeaveTypes(items: LeaveType[]) {
+    const s = getStore();
+    s.leaveTypes = items;
+    save(s);
+}
+
+export function getProjects(): Project[] {
+    return getStore().projects;
+}
+
+export function getActivities(): Activity[] {
+    return getStore().activities;
+}
+
+export function getLeaveTypes(): LeaveType[] {
+    return getStore().leaveTypes;
+}
+
+// ----------------------
+// Time entries
+// ----------------------
 
 export function getTimeEntries(): TimeEntry[] {
-    return load<TimeEntry>(KEYS.timeEntries);
-}
-
-export function saveTimeEntries(list: TimeEntry[]) {
-    save(KEYS.timeEntries, list);
-}
-
-/**
- * addPunch toggelt Start/Stop:
- * - wenn kein offener Eintrag → Start
- * - wenn offener Eintrag → Endzeit setzen (Stop)
- */
-export function addPunch(
-    projectId: string,
-    activityId: string,
-    coords?: { lat: number; lng: number },
-) {
-    const entries = getTimeEntries();
-    const open = entries.find(e => !e.end);
-
-    if (!open) {
-        // Start
-        entries.push({
-            id: uuidv4(),
-            projectId,
-            activityId,
-            start: new Date().toISOString(),
-            syncStatus: 'pending',
-            checkinLat: coords?.lat,
-            checkinLng: coords?.lng,
-        });
-    } else {
-        // Stop (Ende setzen)
-        open.end = new Date().toISOString();
-        open.syncStatus = 'pending';
-        if (coords) {
-            open.checkoutLat = coords.lat;
-            open.checkoutLng = coords.lng;
-        }
-    }
-
-    saveTimeEntries(entries);
+    return getStore().timeEntries;
 }
 
 export function getTodaysEntries(): TimeEntry[] {
     const today = new Date();
-    return getTimeEntries().filter(e => {
-        const d = new Date(e.start);
-        return (
-            d.getFullYear() === today.getFullYear() &&
-            d.getMonth() === today.getMonth() &&
-            d.getDate() === today.getDate()
-        );
-    });
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    const prefix = `${yyyy}-${mm}-${dd}`;
+    return getStore().timeEntries.filter((e) => e.start.startsWith(prefix));
 }
 
-export function getPendingTimeEntries(): TimeEntry[] {
-    return getTimeEntries().filter(e => e.syncStatus === 'pending');
+export function getOpenEntry(): TimeEntry | undefined {
+    return getStore().timeEntries.find((e) => !e.end);
 }
 
-export function markTimeEntrySynced(id: string) {
-    const list = getTimeEntries();
-    const updated = list.map(e =>
-        e.id === id ? { ...e, syncStatus: 'synced' } : e,
-    );
-    saveTimeEntries(updated);
+export function addPunch(
+    projectId: string,
+    activityId: string,
+    coords?: { lat: number; lng: number },
+): TimeEntry {
+    const s = getStore();
+
+    const open = s.timeEntries.find((e) => !e.end);
+
+    const nowIso = new Date().toISOString();
+
+    if (!open) {
+        const entry: TimeEntry = {
+            id: uuid(),
+            projectId,
+            activityId,
+            start: nowIso,
+
+            latitudeIn: coords?.lat,
+            longitudeIn: coords?.lng,
+
+            checkinSynced: false,
+            checkoutSynced: false,
+            timesheetSynced: false,
+
+            syncStatus: 'LOCAL',
+        };
+
+        s.timeEntries.unshift(entry);
+        save(s);
+        return entry;
+    }
+
+    // Stop
+    open.end = nowIso;
+    open.latitudeOut = coords?.lat;
+    open.longitudeOut = coords?.lng;
+    open.syncStatus = 'LOCAL';
+    save(s);
+    return open;
 }
 
-/**
- * Ein TimeEntry vollständig löschen (z.B. nach permanentem Sync-Fehler)
- */
+export function markCheckinSynced(id: string) {
+    const s = getStore();
+    const e = s.timeEntries.find((x) => x.id === id);
+    if (!e) return;
+    e.checkinSynced = true;
+    e.syncStatus = 'LOCAL';
+    save(s);
+}
+
+export function markCheckoutSynced(id: string) {
+    const s = getStore();
+    const e = s.timeEntries.find((x) => x.id === id);
+    if (!e) return;
+    e.checkoutSynced = true;
+    e.syncStatus = 'LOCAL';
+    save(s);
+}
+
+export function markTimesheetSynced(id: string) {
+    const s = getStore();
+    const e = s.timeEntries.find((x) => x.id === id);
+    if (!e) return;
+    e.timesheetSynced = true;
+    e.syncStatus = 'LOCAL';
+    save(s);
+}
+
+export function markEntryFailed(id: string) {
+    const s = getStore();
+    const e = s.timeEntries.find((x) => x.id === id);
+    if (!e) return;
+    e.syncStatus = 'FAILED';
+    save(s);
+}
+
+export function markEntrySynced(id: string) {
+    const s = getStore();
+    const e = s.timeEntries.find((x) => x.id === id);
+    if (!e) return;
+    e.syncStatus = 'SYNCED';
+    save(s);
+}
+
 export function removeTimeEntry(id: string) {
-    const list = getTimeEntries().filter(e => e.id !== id);
-    saveTimeEntries(list);
+    const s = getStore();
+    s.timeEntries = s.timeEntries.filter((x) => x.id !== id);
+    save(s);
 }
 
-// ---------------------------
-// Leave Requests
-// ---------------------------
+// ----------------------
+// Leave requests (local queue)
+// ----------------------
 
-export function getLeaveRequests(): LeaveRequest[] {
-    return load<LeaveRequest>(KEYS.leaveRequests);
-}
-
-export function saveLeaveRequests(list: LeaveRequest[]) {
-    save(KEYS.leaveRequests, list);
-}
-
-export function addLeaveRequest(
-    from: string,
-    to: string,
-    type: string,
-    reason: string,
-) {
-    const list = getLeaveRequests();
-
-    list.push({
-        id: uuidv4(),
+export function addLeaveRequest(from: string, to: string, leaveType: string, reason?: string) {
+    const s = getStore();
+    s.leaveRequests.unshift({
+        id: uuid(),
         from,
         to,
-        type,
+        leaveType,
         reason,
-        syncStatus: 'pending',
+        syncStatus: 'LOCAL',
     });
-
-    saveLeaveRequests(list);
+    save(s);
 }
 
-export function getPendingLeaveRequests(): LeaveRequest[] {
-    return getLeaveRequests().filter(r => r.syncStatus === 'pending');
+export function getLeaveRequests(): LeaveRequestLocal[] {
+    return getStore().leaveRequests;
+}
+
+export function removeLeaveRequest(id: string) {
+    const s = getStore();
+    s.leaveRequests = s.leaveRequests.filter((x) => x.id !== id);
+    save(s);
+}
+
+export function markLeaveRequestFailed(id: string) {
+    const s = getStore();
+    const r = s.leaveRequests.find((x) => x.id === id);
+    if (!r) return;
+    r.syncStatus = 'FAILED';
+    save(s);
 }
 
 export function markLeaveRequestSynced(id: string) {
-    const list = getLeaveRequests();
-    const updated = list.map(r =>
-        r.id === id ? { ...r, syncStatus: 'synced' } : r,
-    );
-    saveLeaveRequests(updated);
+    const s = getStore();
+    const r = s.leaveRequests.find((x) => x.id === id);
+    if (!r) return;
+    r.syncStatus = 'SYNCED';
+    save(s);
 }
 
-/**
- * Einen LeaveRequest vollständig löschen (z.B. nach permanentem Sync-Fehler)
- */
-export function removeLeaveRequest(id: string) {
-    const list = getLeaveRequests().filter(r => r.id !== id);
-    saveLeaveRequests(list);
+// ----------------------
+// Pending helpers 
+// ----------------------
+
+export function getPendingTimeEntries(): TimeEntry[] {
+    const entries = getTimeEntries();
+
+    return entries.filter((e) => {
+        // Offen: nur IN muss ggf. noch raus
+        if (!e.end) {
+            return !e.checkinSynced;
+        }
+
+        // Geschlossen: alles muss ok sein
+        return !e.checkinSynced || !e.checkoutSynced || !e.timesheetSynced;
+    });
 }
 
-// ---------------------------
-// Stammdaten (Projects/Activities/LeaveTypes)
-// ---------------------------
-
-export function getProjects(): Project[] {
-    return load<Project>(KEYS.projects);
-}
-
-export function saveProjects(list: Project[]) {
-    save(KEYS.projects, list);
-}
-
-export function getActivities(): Activity[] {
-    return load<Activity>(KEYS.activities);
-}
-
-export function saveActivities(list: Activity[]) {
-    save(KEYS.activities, list);
-}
-
-export function getLeaveTypes(): LeaveType[] {
-    return load<LeaveType>(KEYS.leaveTypes);
-}
-
-export function saveLeaveTypes(list: LeaveType[]) {
-    save(KEYS.leaveTypes, list);
+export function getPendingLeaveRequests(): LeaveRequestLocal[] {
+    return getLeaveRequests().filter((r) => r.syncStatus !== 'SYNCED');
 }

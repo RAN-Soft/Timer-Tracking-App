@@ -1,60 +1,11 @@
 
-const BASE_URL = '/api/resource';
-
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
 interface FrappeResponse<T> {
     data: T;
+    [key: string]: any;
 }
 
-// Generischer Wrapper NUR für /api/resource/... Endpunkte
-async function frappeRequest<T>(
-    method: HttpMethod,
-    path: string,
-    body?: unknown,
-): Promise<T> {
-    const csrf = getCsrfToken();
-
-    const headers: HeadersInit = {
-        'Content-Type': 'application/json',
-    };
-
-    if (csrf) {
-        headers['X-Frappe-CSRF-Token'] = csrf;
-    }
-
-    const res = await fetch(path, {
-        method,
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: body ? JSON.stringify(body) : undefined,
-    });
-
-    const text = await res.text();
-
-    if (!res.ok) {
-        console.error('frappeRequest error', method, path, res.status, text);
-
-        // Error-Objekt mit extra Infos
-        const error = new Error(`Frappe request failed: ${res.status}`);
-        (error as any).status = res.status;
-        (error as any).responseText = text;
-        throw error;
-    }
-
-    try {
-        const json = JSON.parse(text) as FrappeResponse<T>;
-        return json.data;
-    } catch {
-        return text as unknown as T;
-    }
-}
-
-// -----------------------------------------------------
-// CSRF
-// -----------------------------------------------------
 function getCookie(name: string): string | null {
     const value = `; ${document.cookie}`;
     const parts = value.split(`; ${name}=`);
@@ -74,320 +25,156 @@ function getCsrfToken(): string | null {
     );
 }
 
-// -----------------------------------------------------
-// User / Employee Mapping
-// -----------------------------------------------------
+function extractFrappeMessage(raw: string): string {
+    if (!raw) return 'Unbekannter Fehler';
 
-export async function getCurrentUserName(): Promise<string> {
-    const res = await fetch('/api/method/frappe.auth.get_logged_user', {
-        credentials: 'include',
-    });
-
-    if (!res.ok) {
-        const text = await res.text();
-        console.error('getCurrentUserName error', res.status, text);
-        throw new Error(`get_logged_user failed: ${res.status}`);
-    }
-
-    const json = (await res.json()) as { message?: string };
-    if (!json.message) {
-        throw new Error('get_logged_user: no "message" in response');
-    }
-
-    return json.message;
-}
-
-export async function getCurrentEmployeeName(): Promise<string> {
-    const userName = await getCurrentUserName();
-    console.log('Mapping user to employee, userName =', userName);
-
-    const params = new URLSearchParams({
-        fields: '["name","user_id"]',
-        filters: JSON.stringify([['user_id', '=', userName]]),
-        limit_page_length: '1',
-    });
-
-    const url = `/api/resource/Employee?${params.toString()}`;
-    const res = await fetch(url, { credentials: 'include' });
-
-    if (!res.ok) {
-        const text = await res.text();
-        console.warn('getCurrentEmployeeName HTTP error, fallback to userName:', res.status, text);
-        return userName;
-    }
-
-    const json = await res.json();
-    const list = (json as any).data as { name?: string; user_id?: string }[] | undefined;
-    console.log('Employee list response', list);
-
-    if (Array.isArray(list) && list.length > 0 && list[0] && list[0].name) {
-        console.log('Using employee', list[0].name);
-        return list[0].name;
-    }
-
-    console.warn('No Employee found for user', userName, '- using userName as fallback');
-    return userName;
-}
-
-// -----------------------------------------------------
-// HR Settings (Geo-Flag)
-// -----------------------------------------------------
-
-export interface HRSettings {
-    name?: string;
-    enable_geolocation?: number | boolean;
-    enable_attendance_geolocation?: number | boolean;
-    enable_checkin_checkout_geo_location?: number | boolean;
-    allow_geolocation_tracking?: number | boolean; // wichtig für Pflicht-GPS
-}
-
-export async function fetchHRSettings(): Promise<HRSettings | null> {
     try {
-        const res = await fetch('/api/resource/HR Settings/HR Settings', {
-            credentials: 'include',
-        });
+        const json = JSON.parse(raw);
 
-        if (!res.ok) {
-            const text = await res.text();
-            console.warn('fetchHRSettings HTTP error', res.status, text);
-            return null;
+        if (json.message && typeof json.message === 'string') {
+            return json.message;
         }
 
-        const json = await res.json();
-        console.log('HRSettings response', json);
-        return (json as any).data as HRSettings;
-    } catch (e) {
-        console.error('fetchHRSettings error', e);
-        return null;
-    }
-}
+        if (json._server_messages) {
+            try {
+                const msgs = JSON.parse(json._server_messages);
+                if (Array.isArray(msgs) && msgs.length > 0) return msgs[0];
+            } catch { }
+        }
 
-// -----------------------------------------------------
-// Projekte / Aktivitäten / Leave Types
-// -----------------------------------------------------
+        if (json.exception && typeof json.exception === 'string') {
+            const parts = json.exception.split('\n');
+            return parts[parts.length - 1].trim().replace(/frappe\.exceptions\.[A-Za-z]+:\s*/g, '');
+        }
+    } catch { }
 
-export interface ProjectApi {
-    name: string;                // ID (z.B. PROJ-0001)
-    project_name?: string;       // sprechender Name
-}
-
-export interface ActivityApi {
-    name: string;
-}
-
-export interface LeaveTypeApi {
-    name: string;
-}
-
-export async function fetchProjects(): Promise<ProjectApi[]> {
-    const res = await fetch(
-        `/api/resource/Project?fields=["name","project_name"]&limit_page_length=1000`,
-        { credentials: 'include' },
-    );
-
-    if (!res.ok) {
-        const text = await res.text();
-        console.error('fetchProjects error', res.status, text);
-        throw new Error(`fetchProjects failed: ${res.status}`);
+    if (raw.includes('Traceback')) {
+        const lines = raw.trim().split('\n');
+        return lines[lines.length - 1].trim().replace(/frappe\.exceptions\.[A-Za-z]+:\s*/g, '');
     }
 
-    const json = await res.json();
-    console.log('fetchProjects raw response', json);
-
-    const data = (json as any).data;
-    if (!Array.isArray(data)) {
-        console.warn('fetchProjects: data is not array, got', data);
-        return [];
-    }
-
-    return data.filter((p: any) => p && typeof p.name === 'string');
+    return raw.replace(/frappe\.exceptions\.[A-Za-z]+:\s*/g, '').trim();
 }
 
-export async function fetchActivities(): Promise<ActivityApi[]> {
-    const res = await fetch(
-        `/api/resource/Activity Type?fields=["name"]&limit_page_length=1000`,
-        { credentials: 'include' },
-    );
+// Generischer Wrapper (mit CSRF)
+export async function frappeRequest<T>(
+    method: HttpMethod,
+    path: string,
+    body?: unknown,
+): Promise<T> {
+    const csrf = getCsrfToken();
 
-    if (!res.ok) {
-        const text = await res.text();
-        console.error('fetchActivities error', res.status, text);
-        throw new Error(`fetchActivities failed: ${res.status}`);
-    }
+    const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+    };
+    if (csrf) headers['X-Frappe-CSRF-Token'] = csrf;
 
-    const json = await res.json();
-    console.log('fetchActivities raw response', json);
-
-    const data = (json as any).data;
-    if (!Array.isArray(data)) {
-        console.warn('fetchActivities: data is not array, got', data);
-        return [];
-    }
-
-    return data.filter((a: any) => a && typeof a.name === 'string');
-}
-
-export async function fetchLeaveTypes(): Promise<LeaveTypeApi[]> {
-    const res = await fetch(
-        `/api/resource/Leave Type?fields=["name"]&limit_page_length=1000`,
-        { credentials: 'include' },
-    );
-
-    if (!res.ok) {
-        const text = await res.text();
-        console.error('fetchLeaveTypes error', res.status, text);
-        throw new Error(`fetchLeaveTypes failed: ${res.status}`);
-    }
-
-    const json = await res.json();
-    console.log('fetchLeaveTypes raw response', json);
-
-    const data = (json as any).data;
-    if (!Array.isArray(data)) {
-        console.warn('fetchLeaveTypes: data is not array, got', data);
-        return [];
-    }
-
-    return data.filter((lt: any) => lt && typeof lt.name === 'string');
-}
-
-// -----------------------------------------------------
-// Employee Checkin (HRMS)
-// -----------------------------------------------------
-
-export type CheckinLogType = 'IN' | 'OUT';
-
-export interface EmployeeCheckinPayload {
-    employee: string;
-    time: string;
-    log_type: CheckinLogType;
-    latitude?: number;
-    longitude?: number;
-}
-
-const EMPLOYEE_CHECKIN_DTYPE = 'Employee Checkin';
-
-export async function createEmployeeCheckin(doc: EmployeeCheckinPayload) {
-    console.log('createEmployeeCheckin', doc);
-    return frappeRequest<any>(
-        'POST',
-        `${BASE_URL}/${encodeURIComponent(EMPLOYEE_CHECKIN_DTYPE)}`,
-        { ...doc, doctype: EMPLOYEE_CHECKIN_DTYPE },
-    );
-}
-
-// -----------------------------------------------------
-// Timesheet aus Punch
-// -----------------------------------------------------
-
-export interface TimesheetFromPunchPayload {
-    employee: string;
-    project: string;
-    activity_type: string;
-    from_time: string;
-    to_time: string;
-    note?: string;
-}
-
-interface TimesheetFromPunchResponse {
-    name: string;
-    hours: number;
-}
-
-export async function createTimesheetForPunch(
-    payload: TimesheetFromPunchPayload,
-): Promise<TimesheetFromPunchResponse> {
-    console.log('createTimesheetForPunch payload', payload);
-    const res = await fetch('/api/method/time_tracking_app.api.timesheet.create_timesheet_for_punch', {
-        method: 'POST',
+    const res = await fetch(path, {
+        method,
+        headers,
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-    });
-
-    if (!res.ok) {
-        const text = await res.text();
-        console.error('createTimesheetForPunch error', res.status, text);
-        throw new Error(`Timesheet creation failed: ${res.status}`);
-    }
-
-    const json = await res.json();
-    console.log('createTimesheetForPunch response', json);
-    return (json as any).message as TimesheetFromPunchResponse;
-}
-
-// -----------------------------------------------------
-// Leave Application (Standard ERPNext)
-// -----------------------------------------------------
-
-export interface FrappeLeaveRequestPayload {
-    employee: string;
-    from_date: string;
-    to_date: string;
-    leave_type: string;
-    reason?: string;
-}
-
-const LEAVE_APPLICATION_DTYPE = 'Leave Application';
-
-export async function createLeaveRequest(doc: FrappeLeaveRequestPayload) {
-    console.log('createLeaveRequest payload', doc);
-
-    const res = await fetch(`/api/resource/${encodeURIComponent(LEAVE_APPLICATION_DTYPE)}`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...doc, doctype: LEAVE_APPLICATION_DTYPE }),
+        body: body ? JSON.stringify(body) : undefined,
     });
 
     const text = await res.text();
 
     if (!res.ok) {
-        console.error('createLeaveRequest error', res.status, text);
-
-        let msg = 'Fehler beim Erstellen des Urlaubsantrags';
-
-        try {
-            const json = JSON.parse(text);
-
-            // Frappe / HRMS packt oft "exception" oder "_server_messages"
-            if (typeof json.exception === 'string' && json.exception) {
-                msg = json.exception;
-            } else if (json._server_messages) {
-                try {
-                    // _server_messages ist oft ein JSON-Array als String
-                    const serverMessages = JSON.parse(json._server_messages);
-                    if (Array.isArray(serverMessages) && serverMessages.length > 0) {
-                        msg = serverMessages.join('\n');
-                    }
-                } catch {
-                    // ignorieren, fallback bleibt msg
-                }
-            } else if (typeof json.message === 'string' && json.message) {
-                msg = json.message;
-            }
-        } catch {
-            // text war kein JSON, dann nehmen wir den HTTP-Status + Text
-            if (text) {
-                msg = text;
-            }
-        }
-
-        throw new Error(msg);
+        console.error('frappeRequest error', method, path, res.status, text);
+        const msg = extractFrappeMessage(text);
+        const err = new Error(msg);
+        (err as any).status = res.status;
+        (err as any).responseText = text;
+        throw err;
     }
 
-    // Erfolgsfall → versuchen JSON wieder zu parsen
     try {
-        const json = JSON.parse(text);
-        return (json as any).data;
+        const json = JSON.parse(text) as FrappeResponse<T>;
+        return json.data;
     } catch {
-        return undefined;
+        return text as unknown as T;
     }
 }
 
-// -----------------------------------------------------
-// Attendance
-// -----------------------------------------------------
+// --------------------
+// Auth / user / employee
+// --------------------
+
+export async function getCurrentUserName(): Promise<string> {
+    const res = await fetch('/api/method/frappe.auth.get_logged_user', {
+        method: 'GET',
+        credentials: 'include',
+    });
+    const json = await res.json();
+    return json.message as string;
+}
+
+export async function getCurrentEmployeeName(): Promise<string> {
+    const user = await getCurrentUserName();
+
+    const fields = encodeURIComponent(JSON.stringify(['name', 'user_id']));
+    const filters = encodeURIComponent(JSON.stringify([['user_id', '=', user]]));
+
+    const path = `/api/resource/Employee?fields=${fields}&filters=${filters}&limit_page_length=1`;
+    const data = await frappeRequest<Array<{ name: string; user_id: string }>>('GET', path);
+
+    if (!data || data.length === 0) {
+        throw new Error(`Mitarbeiter: ${user} konnte nicht gefunden werden`);
+    }
+    return data[0].name;
+}
+
+// --------------------
+// HR Settings
+// --------------------
+
+export interface HRSettings {
+    allow_geolocation_tracking?: 0 | 1 | boolean;
+}
+
+export async function fetchHRSettings(): Promise<HRSettings | null> {
+    try {
+        const data = await frappeRequest<HRSettings>('GET', '/api/resource/HR%20Settings/HR%20Settings');
+        return data;
+    } catch (e) {
+        console.warn('fetchHRSettings failed', e);
+        return null;
+    }
+}
+
+// --------------------
+// Master data
+// --------------------
+
+export async function fetchProjects(): Promise<Array<{ id: string; name: string; number?: string }>> {
+    const fields = encodeURIComponent(JSON.stringify(['name', 'project_name']));
+    const path = `/api/resource/Project?fields=${fields}&limit_page_length=1000`;
+
+    const list = await frappeRequest<Array<{ name: string; project_name?: string }>>('GET', path);
+
+    return list.map((p) => ({
+        id: p.name,
+        name: p.project_name || p.name,
+        number: p.name,
+    }));
+}
+
+export async function fetchActivities(): Promise<Array<{ id: string; name: string }>> {
+    const fields = encodeURIComponent(JSON.stringify(['name']));
+    const path = `/api/resource/Activity%20Type?fields=${fields}&limit_page_length=1000`;
+    const list = await frappeRequest<Array<{ name: string }>>('GET', path);
+    return list.map((a) => ({ id: a.name, name: a.name }));
+}
+
+export async function fetchLeaveTypes(): Promise<Array<{ id: string; name: string }>> {
+    const fields = encodeURIComponent(JSON.stringify(['name']));
+    const path = `/api/resource/Leave%20Type?fields=${fields}&limit_page_length=1000`;
+    const list = await frappeRequest<Array<{ name: string }>>('GET', path);
+    return list.map((lt) => ({ id: lt.name, name: lt.name }));
+}
+
+// --------------------
+// Attendance (Employees + todays checkins)
+// --------------------
 
 export interface EmployeeApi {
     name: string;
@@ -409,16 +196,15 @@ export async function fetchEmployees(): Promise<EmployeeApi[]> {
     );
 
     const path = `/api/resource/Employee?fields=${fields}&limit_page_length=1000`;
-
     return frappeRequest<EmployeeApi[]>('GET', path);
 }
 
 export async function fetchTodayCheckins(): Promise<EmployeeCheckinApi[]> {
-    const today = new Date();
+    const now = new Date();
 
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, '0');
-    const dd = String(today.getDate()).padStart(2, '0');
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
 
     const start = `${yyyy}-${mm}-${dd} 00:00:00`;
     const end = `${yyyy}-${mm}-${dd} 23:59:59`;
@@ -433,7 +219,60 @@ export async function fetchTodayCheckins(): Promise<EmployeeCheckinApi[]> {
         ]),
     );
 
-    const path = `/api/resource/Employee%20Checkin?fields=${fields}&filters=${filters}&limit_page_length=1000`;
+    const path =
+        `/api/resource/Employee%20Checkin?fields=${fields}` +
+        `&filters=${filters}` +
+        `&order_by=time%20desc` +
+        `&limit_page_length=1000`;
 
     return frappeRequest<EmployeeCheckinApi[]>('GET', path);
+}
+
+// --------------------
+// Checkin + Timesheet + Leave
+// --------------------
+
+export interface EmployeeCheckinPayload {
+    employee: string;
+    time: string; // ISO
+    log_type: 'IN' | 'OUT';
+    latitude?: number;
+    longitude?: number;
+}
+
+export async function createEmployeeCheckin(payload: EmployeeCheckinPayload) {
+    const doctype = 'Employee Checkin';
+    return frappeRequest<any>('POST', `/api/resource/${encodeURIComponent(doctype)}`, {
+        doctype,
+        ...payload,
+    });
+}
+
+export interface TimesheetFromPunchPayload {
+    employee: string;
+    project: string;
+    activity_type: string;
+    from_time: string; // ISO
+    to_time: string;   // ISO
+    note?: string;
+}
+
+export async function createTimesheetForPunch(payload: TimesheetFromPunchPayload) {
+    return frappeRequest<any>('POST', '/api/method/time_tracking_app.api.timesheet.create_timesheet_for_punch', payload);
+}
+
+export interface FrappeLeaveRequestPayload {
+    employee: string;
+    from_date: string; // yyyy-mm-dd
+    to_date: string;   // yyyy-mm-dd
+    leave_type: string;
+    reason?: string;
+}
+
+export async function createLeaveRequest(doc: FrappeLeaveRequestPayload) {
+    const doctype = 'Leave Application';
+    return frappeRequest<any>('POST', `/api/resource/${encodeURIComponent(doctype)}`, {
+        doctype,
+        ...doc,
+    });
 }
